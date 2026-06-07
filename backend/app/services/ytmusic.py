@@ -79,3 +79,90 @@ def token_response_to_expiry(token_response: dict) -> datetime:
     """Convert Google token response to an aware UTC datetime."""
     expires_in = token_response.get("expires_in", 3600)
     return datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
+
+
+# ── Playlist operations ───────────────────────────────────────────────────────
+
+def list_playlists(yt: ytmusicapi.YTMusic, limit: int = 50, offset: int = 0) -> dict:
+    # ytmusicapi returns all playlists at once; we paginate in Python
+    all_playlists = yt.get_library_playlists(limit=None)
+    page = all_playlists[offset : offset + limit]
+    items = []
+    for p in page:
+        thumbnails = p.get("thumbnails") or []
+        items.append({
+            "id": p.get("playlistId", ""),
+            "name": p.get("title", ""),
+            "description": p.get("description") or None,
+            "track_count": p.get("count") or 0,
+            "thumbnail_url": thumbnails[-1]["url"] if thumbnails else None,
+            "owner": None,
+        })
+    return {"items": items, "total": len(all_playlists), "limit": limit, "offset": offset}
+
+
+def get_playlist_tracks(yt: ytmusicapi.YTMusic, playlist_id: str, limit: int = 100, offset: int = 0) -> dict:
+    result = yt.get_playlist(playlist_id, limit=None)
+    all_tracks = result.get("tracks", [])
+    page = all_tracks[offset : offset + limit]
+    items = []
+    for track in page:
+        if not track.get("videoId"):
+            continue
+        artists_raw = track.get("artists") or []
+        album_raw = track.get("album") or {}
+        duration_s = track.get("duration_seconds")
+        items.append({
+            "id": track["videoId"],
+            "name": track.get("title", ""),
+            "artists": [a["name"] for a in artists_raw if a.get("name")],
+            "album": album_raw.get("name"),
+            "duration_ms": duration_s * 1000 if duration_s else None,
+            "isrc": None,
+        })
+    return {"items": items, "total": len(all_tracks), "limit": limit, "offset": offset}
+
+
+def get_all_playlist_tracks(yt: ytmusicapi.YTMusic, playlist_id: str) -> list[dict]:
+    """Fetch all tracks in a playlist."""
+    result = yt.get_playlist(playlist_id, limit=None)
+    items = []
+    for track in result.get("tracks", []):
+        if not track.get("videoId"):
+            continue
+        artists_raw = track.get("artists") or []
+        album_raw = track.get("album") or {}
+        duration_s = track.get("duration_seconds")
+        items.append({
+            "id": track["videoId"],
+            "name": track.get("title", ""),
+            "artists": [a["name"] for a in artists_raw if a.get("name")],
+            "album": album_raw.get("name"),
+            "duration_ms": duration_s * 1000 if duration_s else None,
+            "isrc": None,
+        })
+    return items
+
+
+def add_tracks(yt: ytmusicapi.YTMusic, playlist_id: str, video_ids: list[str]) -> None:
+    """Add tracks to a YT Music playlist, batching at 50 per call."""
+    for i in range(0, len(video_ids), 50):
+        yt.add_playlist_items(playlist_id, video_ids[i : i + 50])
+
+
+def search_tracks(yt: ytmusicapi.YTMusic, query: str, limit: int = 5) -> list[dict]:
+    results = yt.search(query, filter="songs", limit=limit)
+    tracks = []
+    for r in results:
+        artists_raw = r.get("artists") or []
+        tracks.append({
+            "id": r.get("videoId", ""),
+            "name": r.get("title", ""),
+            "artists": [a["name"] for a in artists_raw if a.get("name")],
+        })
+    return tracks
+
+
+def get_playlist_name(yt: ytmusicapi.YTMusic, playlist_id: str) -> str:
+    result = yt.get_playlist(playlist_id, limit=0)
+    return result.get("title", "")

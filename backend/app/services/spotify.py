@@ -1,4 +1,3 @@
-import json
 from datetime import datetime, timezone
 
 import spotipy
@@ -56,3 +55,64 @@ def build_client(token_info: dict) -> spotipy.Spotify:
 def token_info_to_expiry(token_info: dict) -> datetime:
     """Convert spotipy's expires_at (Unix float) to an aware UTC datetime."""
     return datetime.fromtimestamp(token_info["expires_at"], tz=timezone.utc)
+
+
+# ── Playlist operations ───────────────────────────────────────────────────────
+
+def list_playlists(sp: spotipy.Spotify, limit: int = 50, offset: int = 0) -> dict:
+    result = sp.current_user_playlists(limit=limit, offset=offset)
+    items = []
+    for p in result.get("items", []):
+        images = p.get("images") or []
+        items.append({
+            "id": p["id"],
+            "name": p["name"],
+            "description": p.get("description") or None,
+            "track_count": p.get("tracks", {}).get("total", 0),
+            "thumbnail_url": images[0]["url"] if images else None,
+            "owner": p.get("owner", {}).get("display_name"),
+        })
+    return {"items": items, "total": result.get("total", 0), "limit": limit, "offset": offset}
+
+
+def get_playlist_tracks(sp: spotipy.Spotify, playlist_id: str, limit: int = 100, offset: int = 0) -> dict:
+    fields = "items(track(id,name,artists(name),album(name),duration_ms,external_ids)),total"
+    result = sp.playlist_items(playlist_id, limit=limit, offset=offset, fields=fields)
+    items = []
+    for item in result.get("items", []):
+        track = item.get("track")
+        if not track or not track.get("id"):
+            continue  # skip local/unavailable tracks
+        items.append({
+            "id": track["id"],
+            "name": track["name"],
+            "artists": [a["name"] for a in track.get("artists", [])],
+            "album": track.get("album", {}).get("name"),
+            "duration_ms": track.get("duration_ms"),
+            "isrc": track.get("external_ids", {}).get("isrc"),
+        })
+    return {"items": items, "total": result.get("total", 0), "limit": limit, "offset": offset}
+
+
+def get_all_playlist_tracks(sp: spotipy.Spotify, playlist_id: str) -> list[dict]:
+    """Fetch all tracks in a playlist, auto-paginating."""
+    all_tracks: list[dict] = []
+    offset = 0
+    while True:
+        page = get_playlist_tracks(sp, playlist_id, limit=100, offset=offset)
+        all_tracks.extend(page["items"])
+        if offset + 100 >= page["total"]:
+            break
+        offset += 100
+    return all_tracks
+
+
+def add_tracks(sp: spotipy.Spotify, playlist_id: str, track_ids: list[str]) -> None:
+    """Add tracks to a Spotify playlist, batching at 100 per call."""
+    for i in range(0, len(track_ids), 100):
+        uris = [f"spotify:track:{tid}" for tid in track_ids[i : i + 100]]
+        sp.playlist_add_items(playlist_id, uris)
+
+
+def get_playlist_name(sp: spotipy.Spotify, playlist_id: str) -> str:
+    return sp.playlist(playlist_id, fields="name")["name"]
