@@ -89,7 +89,6 @@ def test_connect_spotify_redirects(client):
     resp = client.get("/api/music/spotify/connect", follow_redirects=False)
     assert resp.status_code in (302, 307)
     assert "accounts.spotify.com" in resp.headers["location"]
-    assert "oauth_state" in resp.cookies
 
 
 def test_connect_ytmusic_redirects(client):
