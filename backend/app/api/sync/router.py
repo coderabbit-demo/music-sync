@@ -3,9 +3,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import spotipy
-import ytmusicapi
 
-from app.api.dependencies import get_spotify_client, get_ytmusic_client
+from app.api.dependencies import get_spotify_client, get_ytmusic_token
 from app.api.sync.schemas import (
     CreatePlaylistPairRequest,
     PlaylistPairOut,
@@ -35,7 +34,7 @@ async def create_pair(
     body: CreatePlaylistPairRequest,
     db: AsyncSession = Depends(get_db),
     sp: spotipy.Spotify = Depends(get_spotify_client),
-    yt: ytmusicapi.YTMusic = Depends(get_ytmusic_client),
+    yt_token: str = Depends(get_ytmusic_token),
 ) -> PlaylistPair:
     # Check for duplicate
     existing = (await db.execute(
@@ -54,7 +53,7 @@ async def create_pair(
         sp_name = body.spotify_playlist_id
 
     try:
-        yt_name = ytmusic_svc.get_playlist_name(yt, body.ytmusic_playlist_id)
+        yt_name = ytmusic_svc.get_playlist_name(yt_token, body.ytmusic_playlist_id)
     except Exception:
         yt_name = body.ytmusic_playlist_id
 
