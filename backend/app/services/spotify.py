@@ -66,11 +66,13 @@ def list_playlists(sp: spotipy.Spotify, limit: int = 50, offset: int = 0) -> dic
     items = []
     for p in result.get("items", []):
         images = p.get("images") or []
+        # Feb 2026 API: the tracks ref sub-object was renamed "tracks" → "items"
+        tracks_ref = p.get("items") or p.get("tracks") or {}
         items.append({
             "id": p["id"],
             "name": p["name"],
             "description": p.get("description") or None,
-            "track_count": p.get("tracks", {}).get("total", 0),
+            "track_count": tracks_ref.get("total", 0) if isinstance(tracks_ref, dict) else 0,
             "thumbnail_url": images[0]["url"] if images else None,
             "owner": p.get("owner", {}).get("display_name"),
         })
@@ -78,11 +80,13 @@ def list_playlists(sp: spotipy.Spotify, limit: int = 50, offset: int = 0) -> dic
 
 
 def get_playlist_tracks(sp: spotipy.Spotify, playlist_id: str, limit: int = 100, offset: int = 0) -> dict:
-    fields = "items(track(id,name,artists(name),album(name),duration_ms,external_ids)),total"
+    # Feb 2026 API: inner field renamed "track" → "item"; request both to stay safe
+    fields = "items(item(id,name,artists(name),album(name),duration_ms,external_ids)),total"
     result = sp.playlist_items(playlist_id, limit=limit, offset=offset, fields=fields)
     items = []
     for item in result.get("items", []):
-        track = item.get("track")
+        # "item" is the new field name (Feb 2026); fall back to "track" for older spotipy responses
+        track = item.get("item") or item.get("track")
         if not track or not track.get("id"):
             continue  # skip local/unavailable tracks
         items.append({
