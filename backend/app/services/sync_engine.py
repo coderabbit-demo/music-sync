@@ -81,9 +81,14 @@ def _match_in_spotify(sp: spotipy.Spotify, track: TrackInfo, threshold: int) -> 
     """Return (target_id, target_name, method, score)."""
     artist = track.artists[0] if track.artists else ""
 
-    # Try ISRC exact match first (only meaningful when source has no ISRC but
-    # Spotify results carry ISRCs we can use for confirmation — handled implicitly
-    # by the high fuzzy score of an exact metadata match)
+    # ISRC exact match (highest confidence — YT Music source tracks carry no ISRC,
+    # but if a source track somehow has one, use it)
+    if track.isrc:
+        isrc_result = sp.search(f"isrc:{track.isrc}", type="track", limit=1)
+        isrc_items = isrc_result.get("tracks", {}).get("items", [])
+        if isrc_items:
+            item = isrc_items[0]
+            return item["id"], item.get("name"), "isrc", 100.0
 
     result = sp.search(f"{artist} {track.name}", type="track", limit=5)
     items = result.get("tracks", {}).get("items", [])

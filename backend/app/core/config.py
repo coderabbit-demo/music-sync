@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     ytmusic_redirect_uri: str = "http://localhost/api/auth/ytmusic/callback"
 
     # Security — required; no defaults so startup fails loudly if missing
-    token_encryption_key: str = ""
-    secret_key: str = ""
+    token_encryption_key: str
+    secret_key: str
 
     # Database
     database_url: str = "postgresql+asyncpg://postgres:postgres@postgres:5432/musicsync"

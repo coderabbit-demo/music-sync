@@ -15,8 +15,11 @@ from app.services import ytmusic as ytmusic_svc
 
 router = APIRouter()
 
-_COOKIE = "oauth_state"
 _COOKIE_OPTS = dict(httponly=True, samesite="lax", max_age=600, path="/")
+
+
+def _state_cookie(provider: str) -> str:
+    return f"oauth_state_{provider}"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -41,8 +44,8 @@ async def _upsert_token(
     await db.commit()
 
 
-def _check_state(request: Request, query_state: str) -> None:
-    cookie_state = request.cookies.get(_COOKIE)
+def _check_state(request: Request, query_state: str, provider: str) -> None:
+    cookie_state = request.cookies.get(_state_cookie(provider))
     if not cookie_state or cookie_state != query_state:
         raise HTTPException(status_code=400, detail="OAuth state mismatch")
     try:
@@ -73,7 +76,7 @@ async def connect_spotify() -> RedirectResponse:
     state = create_oauth_state({"provider": "spotify"})
     url = spotify_svc.get_auth_url(state)
     response = RedirectResponse(url)
-    response.set_cookie(_COOKIE, state, **_COOKIE_OPTS)
+    response.set_cookie(_state_cookie("spotify"), state, **_COOKIE_OPTS)
     return response
 
 
@@ -88,7 +91,7 @@ async def spotify_callback(
     if error:
         raise HTTPException(status_code=400, detail=f"Spotify OAuth error: {error}")
 
-    _check_state(request, state)
+    _check_state(request, state, "spotify")
 
     try:
         token_info = spotify_svc.exchange_code(code)
@@ -105,7 +108,7 @@ async def spotify_callback(
     )
 
     response = RedirectResponse(f"{settings.frontend_url}/connect?connected=spotify")
-    response.delete_cookie(_COOKIE, path="/")
+    response.delete_cookie(_state_cookie("spotify"), path="/")
     return response
 
 
@@ -116,7 +119,7 @@ async def connect_ytmusic() -> RedirectResponse:
     state = create_oauth_state({"provider": "ytmusic"})
     url = ytmusic_svc.get_auth_url(state)
     response = RedirectResponse(url)
-    response.set_cookie(_COOKIE, state, **_COOKIE_OPTS)
+    response.set_cookie(_state_cookie("ytmusic"), state, **_COOKIE_OPTS)
     return response
 
 
@@ -131,7 +134,7 @@ async def ytmusic_callback(
     if error:
         raise HTTPException(status_code=400, detail=f"Google OAuth error: {error}")
 
-    _check_state(request, state)
+    _check_state(request, state, "ytmusic")
 
     try:
         token_response = await ytmusic_svc.exchange_code(code)
@@ -154,7 +157,7 @@ async def ytmusic_callback(
     )
 
     response = RedirectResponse(f"{settings.frontend_url}/connect?connected=ytmusic")
-    response.delete_cookie(_COOKIE, path="/")
+    response.delete_cookie(_state_cookie("ytmusic"), path="/")
     return response
 
 

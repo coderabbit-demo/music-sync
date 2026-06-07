@@ -77,37 +77,43 @@ async def _do_run_sync(job_id: int) -> None:
         job.started_at = datetime.now(tz=timezone.utc)
         await db.commit()
 
-        # Run sync engine (synchronous — spotipy/ytmusicapi are not async)
-        sync_result = run_sync(pair, sp, yt)
+        try:
+            # Run sync engine (synchronous — spotipy/ytmusicapi are not async)
+            sync_result = run_sync(pair, sp, yt)
 
-        # Persist track results
-        for tr in sync_result.tracks:
-            db.add(SyncJobTrack(
-                sync_job_id=job.id,
-                source_provider=tr.source_provider,
-                source_track_id=tr.source_track_id,
-                source_track_name=tr.source_track_name,
-                source_artist=tr.source_artist,
-                source_isrc=tr.source_isrc,
-                target_track_id=tr.target_track_id,
-                target_track_name=tr.target_track_name,
-                match_method=tr.match_method,
-                match_score=tr.match_score,
-                status=tr.status,
-                error=tr.error,
-            ))
+            # Persist track results
+            for tr in sync_result.tracks:
+                db.add(SyncJobTrack(
+                    sync_job_id=job.id,
+                    source_provider=tr.source_provider,
+                    source_track_id=tr.source_track_id,
+                    source_track_name=tr.source_track_name,
+                    source_artist=tr.source_artist,
+                    source_isrc=tr.source_isrc,
+                    target_track_id=tr.target_track_id,
+                    target_track_name=tr.target_track_name,
+                    match_method=tr.match_method,
+                    match_score=tr.match_score,
+                    status=tr.status,
+                    error=tr.error,
+                ))
 
-        # Update job summary
-        job.tracks_matched = sync_result.tracks_matched
-        job.tracks_added = sync_result.tracks_added
-        job.tracks_skipped = sync_result.tracks_skipped
-        job.tracks_failed = sync_result.tracks_failed
-        job.status = "failed" if sync_result.error else "completed"
-        job.error_message = sync_result.error
-        job.completed_at = datetime.now(tz=timezone.utc)
+            # Update job summary
+            job.tracks_matched = sync_result.tracks_matched
+            job.tracks_added = sync_result.tracks_added
+            job.tracks_skipped = sync_result.tracks_skipped
+            job.tracks_failed = sync_result.tracks_failed
+            job.status = "failed" if sync_result.error else "completed"
+            job.error_message = sync_result.error
+            job.completed_at = datetime.now(tz=timezone.utc)
 
-        if not sync_result.error:
-            pair.last_synced_at = job.completed_at
+            if not sync_result.error:
+                pair.last_synced_at = job.completed_at
+
+        except Exception as exc:
+            job.status = "failed"
+            job.error_message = str(exc)
+            job.completed_at = datetime.now(tz=timezone.utc)
 
         await db.commit()
 

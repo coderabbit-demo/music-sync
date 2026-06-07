@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 import spotipy
 import ytmusicapi
@@ -65,7 +66,11 @@ async def create_pair(
         sync_direction=body.sync_direction,
     )
     db.add(pair)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(status_code=409, detail="playlist pair already exists")
     await db.refresh(pair)
     return pair
 
@@ -122,7 +127,14 @@ async def trigger_sync(pair_id: int, db: AsyncSession = Depends(get_db)) -> dict
     await db.commit()
     await db.refresh(job)
 
-    run_sync_task.delay(job.id)
+    try:
+        run_sync_task.delay(job.id)
+    except Exception as exc:
+        job.status = "failed"
+        job.error_message = f"Failed to enqueue sync task: {exc}"
+        await db.commit()
+        raise HTTPException(status_code=503, detail="Sync broker unavailable; please retry") from exc
+
     return {"job_id": job.id}
 
 

@@ -33,7 +33,7 @@ def list_ytmusic_playlists(
 @router.get("/spotify/{playlist_id}/tracks", response_model=TrackPage)
 def get_spotify_tracks(
     playlist_id: str,
-    limit: int = Query(100, ge=1, le=500),
+    limit: int = Query(50, ge=1, le=50),
     offset: int = Query(0, ge=0),
     sp: spotipy.Spotify = Depends(get_spotify_client),
 ) -> TrackPage:

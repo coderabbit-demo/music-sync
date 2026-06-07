@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { syncApi, type PlaylistPair, type SyncJob } from "../api/sync";
@@ -20,10 +20,19 @@ export default function SyncDashboardPage() {
     refetchInterval: 5000, // poll every 5 s to pick up job status changes
   });
 
+  const autoCreateFired = useRef(false);
+
   const createMutation = useMutation({
     mutationFn: syncApi.createPair,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["pairs"] });
+    },
+    onError: (err: unknown) => {
+      // 409 means the pair already exists — treat as success
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 409) {
+        queryClient.invalidateQueries({ queryKey: ["pairs"] });
+      }
     },
   });
 
@@ -32,9 +41,11 @@ export default function SyncDashboardPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["pairs"] }),
   });
 
-  // Auto-create pair when navigated from Playlists page with preselection
+  // Auto-create pair when navigated from Playlists page with preselection.
+  // The ref guard prevents React 18 StrictMode's double-mount from firing twice.
   useEffect(() => {
-    if (preselect?.spotify_playlist_id && preselect?.ytmusic_playlist_id && !createMutation.isPending) {
+    if (preselect?.spotify_playlist_id && preselect?.ytmusic_playlist_id && !autoCreateFired.current) {
+      autoCreateFired.current = true;
       createMutation.mutate({
         spotify_playlist_id: preselect.spotify_playlist_id,
         ytmusic_playlist_id: preselect.ytmusic_playlist_id,

@@ -15,6 +15,8 @@ SPOTIFY_SCOPES = (
 
 
 def _make_auth_manager(state: str | None = None, token_info: dict | None = None) -> SpotifyOAuth:
+    if token_info is not None and "scope" not in token_info:
+        token_info = {**token_info, "scope": SPOTIFY_SCOPES}
     return SpotifyOAuth(
         client_id=settings.spotify_client_id,
         client_secret=settings.spotify_client_secret,
