@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # Sync
     track_match_threshold: int = 85  # rapidfuzz WRatio minimum (0–100)
 
+    # Frontend URL — used for post-OAuth redirects
+    frontend_url: str = "http://localhost"
+
 
 @lru_cache
 def get_settings() -> Settings:
