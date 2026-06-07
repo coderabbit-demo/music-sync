@@ -61,11 +61,14 @@ async def refresh_access_token(refresh_token: str) -> dict:
 
 def build_client(access_token: str, refresh_token: str, token_expiry: datetime) -> ytmusicapi.YTMusic:
     """Build an authenticated YTMusic client from stored token fields."""
+    now = datetime.now(tz=timezone.utc)
+    expires_in = max(0, int((token_expiry - now).total_seconds()))
     token_dict = {
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "Bearer",
         "scope": YTMUSIC_SCOPE,
+        "expires_in": expires_in,
         "expires_at": token_expiry.timestamp(),
     }
     creds = OAuthCredentials(
@@ -85,7 +88,7 @@ def token_response_to_expiry(token_response: dict) -> datetime:
 
 def list_playlists(yt: ytmusicapi.YTMusic, limit: int = 50, offset: int = 0) -> dict:
     # ytmusicapi returns all playlists at once; we paginate in Python
-    all_playlists = yt.get_library_playlists(limit=None)
+    all_playlists = yt.get_library_playlists(limit=9999)
     page = all_playlists[offset : offset + limit]
     items = []
     for p in page:
