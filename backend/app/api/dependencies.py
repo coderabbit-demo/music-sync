@@ -3,7 +3,6 @@
 from datetime import datetime, timedelta, timezone
 
 import spotipy
-import ytmusicapi
 from fastapi import Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,14 +32,14 @@ async def get_spotify_client(
     return spotify_svc.build_client(fresh)
 
 
-async def get_ytmusic_client(
+async def get_ytmusic_token(
     token_row: ProviderToken = Depends(require_ytmusic_token),
     db: AsyncSession = Depends(get_db),
-) -> ytmusicapi.YTMusic:
+) -> str:
+    """Return a fresh YTMusic access token, refreshing if within 5 min of expiry."""
     access = decrypt_token(token_row.access_token)
     refresh = decrypt_token(token_row.refresh_token)
 
-    # Proactively refresh if expiring within 5 minutes
     if token_row.token_expiry - timedelta(minutes=5) <= datetime.now(tz=timezone.utc):
         token_response = await ytmusic_svc.refresh_access_token(refresh)
         access = token_response["access_token"]
@@ -48,4 +47,4 @@ async def get_ytmusic_client(
         token_row.token_expiry = ytmusic_svc.token_response_to_expiry(token_response)
         await db.commit()
 
-    return ytmusic_svc.build_client(access, refresh, token_row.token_expiry)
+    return access

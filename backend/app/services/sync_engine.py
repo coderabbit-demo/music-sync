@@ -9,7 +9,6 @@ Priority:
 from dataclasses import dataclass, field
 
 import spotipy
-import ytmusicapi
 from rapidfuzz import fuzz
 
 from app.core.config import settings
@@ -57,10 +56,10 @@ def _fuzzy_score(s_name: str, s_artist: str, c_name: str, c_artist: str) -> floa
     return title * 0.6 + artist * 0.4
 
 
-def _match_in_ytmusic(yt: ytmusicapi.YTMusic, track: TrackInfo, threshold: int) -> tuple[str | None, str | None, str, float | None]:
+def _match_in_ytmusic(yt_token: str, track: TrackInfo, threshold: int) -> tuple[str | None, str | None, str, float | None]:
     """Return (target_id, target_name, method, score)."""
     query = f"{track.artists[0] if track.artists else ''} {track.name}".strip()
-    candidates = ytmusic_svc.search_tracks(yt, query, limit=5)
+    candidates = ytmusic_svc.search_tracks(yt_token, query, limit=5)
     best_id = best_name = None
     best_score = 0.0
     for c in candidates:
@@ -81,8 +80,7 @@ def _match_in_spotify(sp: spotipy.Spotify, track: TrackInfo, threshold: int) -> 
     """Return (target_id, target_name, method, score)."""
     artist = track.artists[0] if track.artists else ""
 
-    # ISRC exact match (highest confidence — YT Music source tracks carry no ISRC,
-    # but if a source track somehow has one, use it)
+    # ISRC exact match (highest confidence)
     if track.isrc:
         isrc_result = sp.search(f"isrc:{track.isrc}", type="track", limit=1)
         isrc_items = isrc_result.get("tracks", {}).get("items", [])
@@ -109,14 +107,14 @@ def _sync_one_direction(
     source: str,
     pair: PlaylistPair,
     sp: spotipy.Spotify,
-    yt: ytmusicapi.YTMusic,
+    yt_token: str,
     threshold: int,
 ) -> list[TrackResult]:
     if source == "spotify":
         raw_sources = spotify_svc.get_all_playlist_tracks(sp, pair.spotify_playlist_id)
-        existing_ids = {t["id"] for t in ytmusic_svc.get_all_playlist_tracks(yt, pair.ytmusic_playlist_id)}
+        existing_ids = {t["id"] for t in ytmusic_svc.get_all_playlist_tracks(yt_token, pair.ytmusic_playlist_id)}
     else:
-        raw_sources = ytmusic_svc.get_all_playlist_tracks(yt, pair.ytmusic_playlist_id)
+        raw_sources = ytmusic_svc.get_all_playlist_tracks(yt_token, pair.ytmusic_playlist_id)
         existing_ids = {t["id"] for t in spotify_svc.get_all_playlist_tracks(sp, pair.spotify_playlist_id)}
 
     source_tracks = [
@@ -135,7 +133,7 @@ def _sync_one_direction(
     for track in source_tracks:
         try:
             if source == "spotify":
-                tid, tname, method, score = _match_in_ytmusic(yt, track, threshold)
+                tid, tname, method, score = _match_in_ytmusic(yt_token, track, threshold)
             else:
                 tid, tname, method, score = _match_in_spotify(sp, track, threshold)
         except Exception as exc:
@@ -170,17 +168,16 @@ def _sync_one_direction(
             status=status,
         ))
 
-    # Batch write to target
     if to_add:
         if source == "spotify":
-            ytmusic_svc.add_tracks(yt, pair.ytmusic_playlist_id, to_add)
+            ytmusic_svc.add_tracks(yt_token, pair.ytmusic_playlist_id, to_add)
         else:
             spotify_svc.add_tracks(sp, pair.spotify_playlist_id, to_add)
 
     return results
 
 
-def run_sync(pair: PlaylistPair, sp: spotipy.Spotify, yt: ytmusicapi.YTMusic) -> SyncResult:
+def run_sync(pair: PlaylistPair, sp: spotipy.Spotify, yt_token: str) -> SyncResult:
     """Execute the full sync for a playlist pair.  Synchronous; call from Celery task."""
     threshold = settings.track_match_threshold
     result = SyncResult()
@@ -193,7 +190,7 @@ def run_sync(pair: PlaylistPair, sp: spotipy.Spotify, yt: ytmusicapi.YTMusic) ->
             directions.append("ytmusic")
 
         for direction in directions:
-            track_results = _sync_one_direction(direction, pair, sp, yt, threshold)
+            track_results = _sync_one_direction(direction, pair, sp, yt_token, threshold)
             result.tracks.extend(track_results)
 
         for tr in result.tracks:
