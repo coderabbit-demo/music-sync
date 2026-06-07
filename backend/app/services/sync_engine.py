@@ -4,9 +4,14 @@ Priority:
   1. ISRC exact match — only possible when target is Spotify (Spotify tracks carry ISRCs)
   2. Fuzzy match — rapidfuzz WRatio on title (60%) + artist (40%)
   3. Not found — logged, does not fail the job
+
+Idempotency: before marking a track "added", the engine checks whether the
+matched target-track ID already exists in the destination playlist.  If it
+does, the track is marked "skipped" — nothing is written to the target.
 """
 
 from dataclasses import dataclass, field
+from typing import Generator
 
 import spotipy
 from rapidfuzz import fuzz
@@ -103,13 +108,21 @@ def _match_in_spotify(sp: spotipy.Spotify, track: TrackInfo, threshold: int) -> 
     return None, None, "not_found", best_score
 
 
-def _sync_one_direction(
+def iter_sync_direction(
     source: str,
     pair: PlaylistPair,
     sp: spotipy.Spotify,
     yt_token: str,
     threshold: int,
-) -> list[TrackResult]:
+) -> Generator[TrackResult, None, None]:
+    """Yield one TrackResult per source track.
+
+    Idempotency: fetches existing target IDs up-front and marks already-present
+    matches as "skipped" so they are never written to the destination twice.
+
+    The caller is responsible for collecting "added" results and calling
+    add_tracks once all tracks have been processed.
+    """
     if source == "spotify":
         raw_sources = spotify_svc.get_all_playlist_tracks(sp, pair.spotify_playlist_id)
         existing_ids = {t["id"] for t in ytmusic_svc.get_all_playlist_tracks(yt_token, pair.ytmusic_playlist_id)}
@@ -117,27 +130,21 @@ def _sync_one_direction(
         raw_sources = ytmusic_svc.get_all_playlist_tracks(yt_token, pair.ytmusic_playlist_id)
         existing_ids = {t["id"] for t in spotify_svc.get_all_playlist_tracks(sp, pair.spotify_playlist_id)}
 
-    source_tracks = [
-        TrackInfo(
+    for t in raw_sources:
+        track = TrackInfo(
             id=t["id"],
             name=t["name"],
             artists=t.get("artists", []),
             isrc=t.get("isrc"),
         )
-        for t in raw_sources
-    ]
 
-    results: list[TrackResult] = []
-    to_add: list[str] = []
-
-    for track in source_tracks:
         try:
             if source == "spotify":
                 tid, tname, method, score = _match_in_ytmusic(yt_token, track, threshold)
             else:
                 tid, tname, method, score = _match_in_spotify(sp, track, threshold)
         except Exception as exc:
-            results.append(TrackResult(
+            yield TrackResult(
                 source_provider=source,
                 source_track_id=track.id,
                 source_track_name=track.name,
@@ -146,7 +153,7 @@ def _sync_one_direction(
                 target_track_id=None, target_track_name=None,
                 match_method=None, match_score=None,
                 status="error", error=str(exc),
-            ))
+            )
             continue
 
         if method == "not_found":
@@ -155,26 +162,19 @@ def _sync_one_direction(
             status = "skipped"
         else:
             status = "added"
-            to_add.append(tid)  # type: ignore[arg-type]
 
-        results.append(TrackResult(
+        yield TrackResult(
             source_provider=source,
             source_track_id=track.id,
             source_track_name=track.name,
             source_artist=track.artists[0] if track.artists else None,
             source_isrc=track.isrc,
-            target_track_id=tid, target_track_name=tname,
-            match_method=method, match_score=score,
+            target_track_id=tid,
+            target_track_name=tname,
+            match_method=method,
+            match_score=score,
             status=status,
-        ))
-
-    if to_add:
-        if source == "spotify":
-            ytmusic_svc.add_tracks(yt_token, pair.ytmusic_playlist_id, to_add)
-        else:
-            spotify_svc.add_tracks(sp, pair.spotify_playlist_id, to_add)
-
-    return results
+        )
 
 
 def run_sync(pair: PlaylistPair, sp: spotipy.Spotify, yt_token: str) -> SyncResult:
@@ -190,8 +190,17 @@ def run_sync(pair: PlaylistPair, sp: spotipy.Spotify, yt_token: str) -> SyncResu
             directions.append("ytmusic")
 
         for direction in directions:
-            track_results = _sync_one_direction(direction, pair, sp, yt_token, threshold)
-            result.tracks.extend(track_results)
+            to_add: list[str] = []
+            for tr in iter_sync_direction(direction, pair, sp, yt_token, threshold):
+                result.tracks.append(tr)
+                if tr.status == "added" and tr.target_track_id:
+                    to_add.append(tr.target_track_id)
+
+            if to_add:
+                if direction == "spotify":
+                    ytmusic_svc.add_tracks(yt_token, pair.ytmusic_playlist_id, to_add)
+                else:
+                    spotify_svc.add_tracks(sp, pair.spotify_playlist_id, to_add)
 
         for tr in result.tracks:
             if tr.status == "added":

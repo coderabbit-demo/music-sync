@@ -1,5 +1,5 @@
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from celery import shared_task
 from sqlalchemy import select
@@ -11,7 +11,7 @@ from app.core.security import decrypt_token, encrypt_token
 from app.models import PlaylistPair, ProviderToken, SyncJob, SyncJobTrack
 from app.services import spotify as spotify_svc
 from app.services import ytmusic as ytmusic_svc
-from app.services.sync_engine import run_sync
+from app.services.sync_engine import iter_sync_direction
 from app.tasks.celery_app import celery_app
 
 # NullPool is required for asyncio.run() in Celery prefork workers.
@@ -71,7 +71,6 @@ async def _do_run_sync(job_id: int) -> None:
         # Build YTMusic client (refresh if needed)
         yt_access = decrypt_token(yt_row.access_token)
         yt_refresh = decrypt_token(yt_row.refresh_token)
-        from datetime import timedelta
         if yt_row.token_expiry - timedelta(minutes=5) <= datetime.now(tz=timezone.utc):
             token_resp = await ytmusic_svc.refresh_access_token(yt_refresh)
             yt_access = token_resp["access_token"]
@@ -86,37 +85,58 @@ async def _do_run_sync(job_id: int) -> None:
         await db.commit()
 
         try:
-            # Run sync engine (synchronous — spotipy and httpx sync client)
-            sync_result = run_sync(pair, sp, yt_access)
+            directions = []
+            if pair.sync_direction in ("spotify_to_yt", "bidirectional"):
+                directions.append("spotify")
+            if pair.sync_direction in ("yt_to_spotify", "bidirectional"):
+                directions.append("ytmusic")
 
-            # Persist track results
-            for tr in sync_result.tracks:
-                db.add(SyncJobTrack(
-                    sync_job_id=job.id,
-                    source_provider=tr.source_provider,
-                    source_track_id=tr.source_track_id,
-                    source_track_name=tr.source_track_name,
-                    source_artist=tr.source_artist,
-                    source_isrc=tr.source_isrc,
-                    target_track_id=tr.target_track_id,
-                    target_track_name=tr.target_track_name,
-                    match_method=tr.match_method,
-                    match_score=tr.match_score,
-                    status=tr.status,
-                    error=tr.error,
-                ))
+            threshold = settings.track_match_threshold
+            tracks_added = tracks_skipped = tracks_failed = 0
 
-            # Update job summary
-            job.tracks_matched = sync_result.tracks_matched
-            job.tracks_added = sync_result.tracks_added
-            job.tracks_skipped = sync_result.tracks_skipped
-            job.tracks_failed = sync_result.tracks_failed
-            job.status = "failed" if sync_result.error else "completed"
-            job.error_message = sync_result.error
+            for direction in directions:
+                to_add: list[str] = []
+
+                for tr in iter_sync_direction(direction, pair, sp, yt_access, threshold):
+                    # Commit each track immediately so the UI can poll live progress
+                    db.add(SyncJobTrack(
+                        sync_job_id=job.id,
+                        source_provider=tr.source_provider,
+                        source_track_id=tr.source_track_id,
+                        source_track_name=tr.source_track_name,
+                        source_artist=tr.source_artist,
+                        source_isrc=tr.source_isrc,
+                        target_track_id=tr.target_track_id,
+                        target_track_name=tr.target_track_name,
+                        match_method=tr.match_method,
+                        match_score=tr.match_score,
+                        status=tr.status,
+                        error=tr.error,
+                    ))
+                    await db.commit()
+
+                    if tr.status == "added" and tr.target_track_id:
+                        to_add.append(tr.target_track_id)
+                        tracks_added += 1
+                    elif tr.status == "skipped":
+                        tracks_skipped += 1
+                    elif tr.status in ("not_found", "error"):
+                        tracks_failed += 1
+
+                # Batch-add all matched tracks to the target playlist
+                if to_add:
+                    if direction == "spotify":
+                        ytmusic_svc.add_tracks(yt_access, pair.ytmusic_playlist_id, to_add)
+                    else:
+                        spotify_svc.add_tracks(sp, pair.spotify_playlist_id, to_add)
+
+            job.tracks_matched = tracks_added + tracks_skipped
+            job.tracks_added = tracks_added
+            job.tracks_skipped = tracks_skipped
+            job.tracks_failed = tracks_failed
+            job.status = "completed"
             job.completed_at = datetime.now(tz=timezone.utc)
-
-            if not sync_result.error:
-                pair.last_synced_at = job.completed_at
+            pair.last_synced_at = job.completed_at
 
         except Exception as exc:
             job.status = "failed"
@@ -134,7 +154,6 @@ def scheduled_sync_all() -> None:
 
 
 async def _do_scheduled_sync() -> None:
-    from datetime import timedelta
     now = datetime.now(tz=timezone.utc)
 
     async with AsyncSessionLocal() as db:
