@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     # Google OAuth for YouTube Music
     google_client_id: str = ""
     google_client_secret: str = ""
-    ytmusic_redirect_uri: str = "http://127.0.0.1:8000/api/music/ytmusic/callback"
+    ytmusic_redirect_uri: str = "http://localhost/api/music/ytmusic/callback"
 
     # Security — required; no defaults so startup fails loudly if missing
     token_encryption_key: str

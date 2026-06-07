@@ -15,11 +15,11 @@ export const authApi = {
     axios.get<AuthStatus>("/api/music/status").then((r) => r.data),
 
   connectSpotify: () => {
-    window.location.href = "http://127.0.0.1:8000/api/music/spotify/connect";
+    window.location.href = "/api/music/spotify/connect";
   },
 
   connectYTMusic: () => {
-    window.location.href = "http://127.0.0.1:8000/api/music/ytmusic/connect";
+    window.location.href = "/api/music/ytmusic/connect";
   },
 
   disconnect: (provider: "spotify" | "ytmusic"): Promise<void> =>

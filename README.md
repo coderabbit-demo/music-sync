@@ -42,7 +42,7 @@ cd music-sync
 3. Go to *APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID*.
 4. Set the application type to **Web application** and add the authorized redirect URI:
    ```
-   http://127.0.0.1:8000/api/music/ytmusic/callback
+   http://localhost/api/music/ytmusic/callback
    ```
 5. Note the **Client ID** and **Client Secret**.
 
