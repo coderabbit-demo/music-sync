@@ -1,12 +1,15 @@
 import json
+import logging
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
 import ytmusicapi
-from ytmusicapi import OAuthCredentials
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
@@ -60,22 +63,35 @@ async def refresh_access_token(refresh_token: str) -> dict:
 
 
 def build_client(access_token: str, refresh_token: str, token_expiry: datetime) -> ytmusicapi.YTMusic:
-    """Build an authenticated YTMusic client from stored token fields."""
-    now = datetime.now(tz=timezone.utc)
-    expires_in = max(0, int((token_expiry - now).total_seconds()))
-    token_dict = {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "Bearer",
-        "scope": YTMUSIC_SCOPE,
-        "expires_in": expires_in,
-        "expires_at": token_expiry.timestamp(),
+    """Build an authenticated YTMusic client from stored token fields.
+
+    Uses OAUTH_CUSTOM_FULL mode: passes the Bearer token directly as a header so
+    ytmusicapi skips its internal RefreshingToken/OAuthCredentials machinery. Token
+    refresh is handled by the get_ytmusic_client dependency instead.
+    """
+    auth_headers = {
+        "authorization": f"Bearer {access_token}",
+        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0",
+        "accept": "*/*",
+        "accept-encoding": "gzip, deflate",
+        "content-type": "application/json",
+        "content-encoding": "gzip",
+        "origin": "https://music.youtube.com",
+        "X-Goog-Request-Time": str(int(time.time())),
     }
-    creds = OAuthCredentials(
-        client_id=settings.google_client_id,
-        client_secret=settings.google_client_secret,
-    )
-    return ytmusicapi.YTMusic(auth=json.dumps(token_dict), oauth_credentials=creds)
+    yt = ytmusicapi.YTMusic(auth=json.dumps(auth_headers))
+
+    def _log_yt_error(response, *args, **kwargs):
+        if response.status_code >= 400:
+            logger.error(
+                "YTMusic API error %d for %s: %s",
+                response.status_code,
+                response.url,
+                response.text[:2000],
+            )
+
+    yt._session.hooks["response"].append(_log_yt_error)
+    return yt
 
 
 def token_response_to_expiry(token_response: dict) -> datetime:

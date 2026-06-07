@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 import spotipy
 import ytmusicapi
+from ytmusicapi.exceptions import YTMusicServerError
 
 from app.api.dependencies import get_spotify_client, get_ytmusic_client
 from app.api.playlists.schemas import PlaylistPage, TrackPage
@@ -26,7 +27,13 @@ def list_ytmusic_playlists(
     offset: int = Query(0, ge=0),
     yt: ytmusicapi.YTMusic = Depends(get_ytmusic_client),
 ) -> PlaylistPage:
-    data = ytmusic_svc.list_playlists(yt, limit=limit, offset=offset)
+    try:
+        data = ytmusic_svc.list_playlists(yt, limit=limit, offset=offset)
+    except YTMusicServerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"YouTube Music API error: {exc}. Check backend logs for the full response.",
+        ) from exc
     return PlaylistPage(**data)
 
 
@@ -55,6 +62,11 @@ def get_ytmusic_tracks(
 ) -> TrackPage:
     try:
         data = ytmusic_svc.get_playlist_tracks(yt, playlist_id, limit=limit, offset=offset)
+    except YTMusicServerError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=f"YouTube Music API error: {exc}. Check backend logs for the full response.",
+        ) from exc
     except Exception as exc:
         if "not found" in str(exc).lower():
             raise HTTPException(status_code=404, detail="playlist not found")
