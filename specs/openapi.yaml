@@ -1,0 +1,664 @@
+openapi: 3.0.3
+info:
+  title: music-sync API
+  description: Synchronizes playlists between Spotify and YouTube Music
+  version: 1.0.0
+
+servers:
+  - url: http://localhost/api
+    description: Local Docker environment
+
+tags:
+  - name: auth
+    description: Provider OAuth2 connection management
+  - name: playlists
+    description: Browse playlists and tracks from connected providers
+  - name: sync
+    description: Playlist pair management and sync operations
+
+paths:
+
+  # ─── Auth ────────────────────────────────────────────────────────────────────
+
+  /auth/status:
+    get:
+      tags: [auth]
+      summary: Get connection status for all providers
+      operationId: getAuthStatus
+      responses:
+        "200":
+          description: Connection status for each provider
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthStatus"
+
+  /auth/spotify/connect:
+    get:
+      tags: [auth]
+      summary: Initiate Spotify OAuth2 flow
+      operationId: connectSpotify
+      description: Redirects the browser to Spotify's authorization page. The `state` parameter is set in a signed session cookie for CSRF protection.
+      responses:
+        "302":
+          description: Redirect to Spotify OAuth authorization URL
+          headers:
+            Location:
+              schema:
+                type: string
+
+  /auth/spotify/callback:
+    get:
+      tags: [auth]
+      summary: Handle Spotify OAuth2 callback
+      operationId: spotifyCallback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: error
+          in: query
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to frontend with ?connected=spotify on success
+        "400":
+          description: State mismatch or OAuth error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /auth/ytmusic/connect:
+    get:
+      tags: [auth]
+      summary: Initiate YouTube Music OAuth2 flow
+      operationId: connectYTMusic
+      responses:
+        "302":
+          description: Redirect to Google OAuth authorization URL
+
+  /auth/ytmusic/callback:
+    get:
+      tags: [auth]
+      summary: Handle YouTube Music OAuth2 callback
+      operationId: ytmusicCallback
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to frontend with ?connected=ytmusic on success
+        "400":
+          $ref: "#/components/responses/BadRequest"
+
+  /auth/{provider}:
+    delete:
+      tags: [auth]
+      summary: Disconnect a provider
+      operationId: disconnectProvider
+      parameters:
+        - $ref: "#/components/parameters/provider"
+      responses:
+        "204":
+          description: Provider disconnected, tokens deleted
+        "404":
+          description: Provider was not connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  # ─── Playlists ───────────────────────────────────────────────────────────────
+
+  /playlists/{provider}:
+    get:
+      tags: [playlists]
+      summary: List playlists for a provider
+      operationId: listPlaylists
+      parameters:
+        - $ref: "#/components/parameters/provider"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Paginated list of playlists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaylistPage"
+        "401":
+          $ref: "#/components/responses/ProviderNotConnected"
+
+  /playlists/{provider}/{playlist_id}/tracks:
+    get:
+      tags: [playlists]
+      summary: Get tracks in a playlist
+      operationId: getPlaylistTracks
+      parameters:
+        - $ref: "#/components/parameters/provider"
+        - name: playlist_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            minimum: 1
+            maximum: 500
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+            minimum: 0
+      responses:
+        "200":
+          description: Paginated list of tracks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackPage"
+        "401":
+          $ref: "#/components/responses/ProviderNotConnected"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  # ─── Sync Pairs ──────────────────────────────────────────────────────────────
+
+  /sync/pairs:
+    get:
+      tags: [sync]
+      summary: List all playlist pairs
+      operationId: listPlaylistPairs
+      responses:
+        "200":
+          description: All configured playlist pairs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PlaylistPair"
+
+    post:
+      tags: [sync]
+      summary: Create a playlist pair
+      operationId: createPlaylistPair
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePlaylistPairRequest"
+      responses:
+        "201":
+          description: Pair created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaylistPair"
+        "409":
+          description: Pair already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /sync/pairs/{pair_id}:
+    delete:
+      tags: [sync]
+      summary: Delete a playlist pair
+      operationId: deletePlaylistPair
+      parameters:
+        - $ref: "#/components/parameters/pair_id"
+      responses:
+        "204":
+          description: Pair deleted (cascade deletes jobs and track results)
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sync/pairs/{pair_id}/run:
+    post:
+      tags: [sync]
+      summary: Trigger a one-time sync for a pair
+      operationId: runSync
+      parameters:
+        - $ref: "#/components/parameters/pair_id"
+      responses:
+        "202":
+          description: Sync job enqueued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  job_id:
+                    type: integer
+                required: [job_id]
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: A sync job is already running for this pair
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
+  /sync/pairs/{pair_id}/jobs:
+    get:
+      tags: [sync]
+      summary: List sync job history for a pair
+      operationId: listSyncJobs
+      parameters:
+        - $ref: "#/components/parameters/pair_id"
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Sync job history (most recent first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/SyncJob"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /sync/pairs/{pair_id}/schedule:
+    patch:
+      tags: [sync]
+      summary: Update auto-sync schedule for a pair
+      operationId: updateSyncSchedule
+      parameters:
+        - $ref: "#/components/parameters/pair_id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateScheduleRequest"
+      responses:
+        "200":
+          description: Schedule updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PlaylistPair"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/ValidationError"
+
+  /sync/jobs/{job_id}:
+    get:
+      tags: [sync]
+      summary: Get sync job status and per-track results
+      operationId: getSyncJob
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Sync job detail with track results
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncJobDetail"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+# ─── Components ───────────────────────────────────────────────────────────────
+
+components:
+
+  parameters:
+    provider:
+      name: provider
+      in: path
+      required: true
+      schema:
+        type: string
+        enum: [spotify, ytmusic]
+
+    pair_id:
+      name: pair_id
+      in: path
+      required: true
+      schema:
+        type: integer
+
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    NotFound:
+      description: Resource not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ProviderNotConnected:
+      description: Provider is not connected
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+    ValidationError:
+      description: Request validation error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+
+  schemas:
+
+    Error:
+      type: object
+      properties:
+        detail:
+          type: string
+      required: [detail]
+
+    AuthStatus:
+      type: object
+      properties:
+        spotify:
+          $ref: "#/components/schemas/ProviderStatus"
+        ytmusic:
+          $ref: "#/components/schemas/ProviderStatus"
+      required: [spotify, ytmusic]
+
+    ProviderStatus:
+      type: object
+      properties:
+        connected:
+          type: boolean
+        scope:
+          type: string
+          description: Space-separated OAuth scopes (only present when connected)
+      required: [connected]
+
+    Playlist:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+          nullable: true
+        track_count:
+          type: integer
+        thumbnail_url:
+          type: string
+          nullable: true
+        owner:
+          type: string
+          nullable: true
+      required: [id, name, track_count]
+
+    PlaylistPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Playlist"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required: [items, total, limit, offset]
+
+    Track:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        artists:
+          type: array
+          items:
+            type: string
+        album:
+          type: string
+          nullable: true
+        duration_ms:
+          type: integer
+          nullable: true
+        isrc:
+          type: string
+          nullable: true
+          description: ISO 3901 code; present on Spotify tracks when available
+      required: [id, name, artists]
+
+    TrackPage:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Track"
+        total:
+          type: integer
+        limit:
+          type: integer
+        offset:
+          type: integer
+      required: [items, total, limit, offset]
+
+    PlaylistPair:
+      type: object
+      properties:
+        id:
+          type: integer
+        spotify_playlist_id:
+          type: string
+        spotify_playlist_name:
+          type: string
+        ytmusic_playlist_id:
+          type: string
+        ytmusic_playlist_name:
+          type: string
+        sync_direction:
+          type: string
+          enum: [spotify_to_yt, yt_to_spotify, bidirectional]
+        auto_sync:
+          type: boolean
+        sync_interval_hours:
+          type: integer
+          minimum: 1
+          maximum: 168
+        last_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - spotify_playlist_id
+        - spotify_playlist_name
+        - ytmusic_playlist_id
+        - ytmusic_playlist_name
+        - sync_direction
+        - auto_sync
+        - sync_interval_hours
+        - created_at
+
+    CreatePlaylistPairRequest:
+      type: object
+      properties:
+        spotify_playlist_id:
+          type: string
+        ytmusic_playlist_id:
+          type: string
+        sync_direction:
+          type: string
+          enum: [spotify_to_yt, yt_to_spotify, bidirectional]
+          default: spotify_to_yt
+      required: [spotify_playlist_id, ytmusic_playlist_id]
+
+    UpdateScheduleRequest:
+      type: object
+      properties:
+        auto_sync:
+          type: boolean
+        sync_interval_hours:
+          type: integer
+          minimum: 1
+          maximum: 168
+
+    SyncJob:
+      type: object
+      properties:
+        id:
+          type: integer
+        playlist_pair_id:
+          type: integer
+        triggered_by:
+          type: string
+          enum: [manual, scheduler]
+        status:
+          type: string
+          enum: [pending, running, completed, failed]
+        tracks_matched:
+          type: integer
+        tracks_added:
+          type: integer
+        tracks_skipped:
+          type: integer
+        tracks_failed:
+          type: integer
+        error_message:
+          type: string
+          nullable: true
+        started_at:
+          type: string
+          format: date-time
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+      required:
+        - id
+        - playlist_pair_id
+        - triggered_by
+        - status
+        - tracks_matched
+        - tracks_added
+        - tracks_skipped
+        - tracks_failed
+        - created_at
+
+    SyncJobTrack:
+      type: object
+      properties:
+        id:
+          type: integer
+        source_provider:
+          type: string
+          enum: [spotify, ytmusic]
+        source_track_id:
+          type: string
+        source_track_name:
+          type: string
+        source_artist:
+          type: string
+          nullable: true
+        source_isrc:
+          type: string
+          nullable: true
+        target_track_id:
+          type: string
+          nullable: true
+        target_track_name:
+          type: string
+          nullable: true
+        match_method:
+          type: string
+          enum: [isrc, fuzzy, not_found]
+          nullable: true
+        match_score:
+          type: number
+          nullable: true
+        status:
+          type: string
+          enum: [added, skipped, not_found, error]
+        error:
+          type: string
+          nullable: true
+      required: [id, source_provider, source_track_id, source_track_name, status]
+
+    SyncJobDetail:
+      allOf:
+        - $ref: "#/components/schemas/SyncJob"
+        - type: object
+          properties:
+            tracks:
+              type: array
+              items:
+                $ref: "#/components/schemas/SyncJobTrack"
+          required: [tracks]
