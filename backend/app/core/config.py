@@ -13,7 +13,7 @@ class Settings(BaseSettings):
     # Spotify OAuth
     spotify_client_id: str = ""
     spotify_client_secret: str = ""
-    spotify_redirect_uri: str = "http://localhost/api/auth/spotify/callback"
+    spotify_redirect_uri: str = "http://127.0.0.1:8000/api/music/spotify/callback"
 
     # Google OAuth for YouTube Music
     google_client_id: str = ""
