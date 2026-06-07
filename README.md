@@ -31,7 +31,7 @@ cd music-sync
 1. Go to the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard) and create an app.
 2. Under **Edit Settings**, add the redirect URI:
    ```
-   http://localhost/api/auth/spotify/callback
+   http://127.0.0.1:8000/api/music/spotify/callback
    ```
 3. Note the **Client ID** and **Client Secret**.
 
