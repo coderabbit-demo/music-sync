@@ -3,8 +3,10 @@ from datetime import datetime, timezone
 
 from celery import shared_task
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
 
-from app.core.database import AsyncSessionLocal
+from app.core.config import settings
 from app.core.security import decrypt_token, encrypt_token
 from app.models import PlaylistPair, ProviderToken, SyncJob, SyncJobTrack
 from app.services import spotify as spotify_svc
@@ -12,6 +14,13 @@ from app.services import ytmusic as ytmusic_svc
 from app.services.sync_engine import run_sync
 from app.tasks.celery_app import celery_app
 
+# NullPool is required for asyncio.run() in Celery prefork workers.
+# A regular pool caches asyncpg connections bound to a specific event loop.
+# Each asyncio.run() creates and then closes a new loop, so the next task finds
+# pool connections "attached to a different loop" and raises RuntimeError.
+# NullPool creates and destroys a connection per session context — no caching.
+_engine = create_async_engine(settings.database_url, poolclass=NullPool)
+AsyncSessionLocal = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
 # ── One-time sync ─────────────────────────────────────────────────────────────
 
