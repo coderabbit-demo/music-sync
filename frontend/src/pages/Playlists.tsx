@@ -20,7 +20,7 @@ export default function PlaylistsPage() {
 
   const { data: spTracksData, isLoading: spTracksLoading } = useQuery({
     queryKey: ["tracks", "spotify", selectedSpotify?.id],
-    queryFn: () => playlistsApi.getPlaylistTracks("spotify", selectedSpotify!.id, 200),
+    queryFn: () => playlistsApi.getPlaylistTracks("spotify", selectedSpotify!.id, 100),
     enabled: !!selectedSpotify,
   });
 
@@ -261,7 +261,16 @@ const styles: Record<string, React.CSSProperties> = {
     paddingLeft: "0.6rem",
     marginTop: 0,
   },
-  list: { listStyle: "none", padding: 0, margin: 0, display: "flex", flexDirection: "column", gap: "6px" },
+  list: {
+    listStyle: "none",
+    padding: "0 4px 0 0",
+    margin: 0,
+    display: "flex",
+    flexDirection: "column",
+    gap: "6px",
+    maxHeight: "460px",
+    overflowY: "auto",
+  },
   item: {
     display: "flex",
     alignItems: "center",
