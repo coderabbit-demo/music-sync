@@ -101,4 +101,4 @@ Copy `.env.example` to `.env` and fill in:
 - `TOKEN_ENCRYPTION_KEY` — generate with: `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
 - `SECRET_KEY` — generate with: `python -c "import secrets; print(secrets.token_hex(32))"`
 
-Both OAuth apps must have their redirect URIs set to `http://localhost/api/auth/{provider}/callback`.
+Both OAuth apps must have their redirect URIs set to `http://localhost/api/music/{provider}/callback`.
