@@ -17,7 +17,7 @@ The user connects their Spotify and YouTube Music accounts via OAuth2. Once conn
 **And** the redirect URI is `SPOTIFY_REDIRECT_URI` from env  
 
 **Given** the user approves access on Spotify  
-**When** Spotify redirects to `/api/auth/spotify/callback?code=<code>&state=<state>`  
+**When** Spotify redirects to `/api/music/spotify/callback?code=<code>&state=<state>`  
 **Then** the backend exchanges the code for access and refresh tokens  
 **And** tokens are encrypted and upserted into `provider_tokens` for provider `spotify`  
 **And** the browser is redirected to the frontend with `?connected=spotify`  
@@ -32,7 +32,7 @@ The user connects their Spotify and YouTube Music accounts via OAuth2. Once conn
 **And** the URL includes scopes: `https://www.googleapis.com/auth/youtube`  
 
 **Given** the user approves access on Google  
-**When** Google redirects to `/api/auth/ytmusic/callback?code=<code>`  
+**When** Google redirects to `/api/music/ytmusic/callback?code=<code>`  
 **Then** the backend exchanges the code for access and refresh tokens via `ytmusicapi`  
 **And** tokens are stored in `provider_tokens` for provider `ytmusic`  
 **And** the browser is redirected to the frontend with `?connected=ytmusic`  
@@ -41,7 +41,7 @@ The user connects their Spotify and YouTube Music accounts via OAuth2. Once conn
 
 ### Scenario: OAuth state mismatch (CSRF protection)
 
-**Given** a callback arrives at `/api/auth/spotify/callback`  
+**Given** a callback arrives at `/api/music/spotify/callback`  
 **When** the `state` parameter does not match the value stored in the session  
 **Then** the backend returns HTTP 400  
 **And** no token is stored  
@@ -51,7 +51,7 @@ The user connects their Spotify and YouTube Music accounts via OAuth2. Once conn
 ### Scenario: Check connection status
 
 **Given** Spotify is connected and YouTube Music is not  
-**When** `GET /api/auth/status` is called  
+**When** `GET /api/music/status` is called  
 **Then** the response is:
 ```json
 {
@@ -74,9 +74,9 @@ The user connects their Spotify and YouTube Music accounts via OAuth2. Once conn
 ### Scenario: Disconnect a provider
 
 **Given** Spotify is connected  
-**When** `DELETE /api/auth/spotify` is called  
+**When** `DELETE /api/music/spotify` is called  
 **Then** the `provider_tokens` row for `spotify` is deleted  
-**And** `GET /api/auth/status` returns `"spotify": { "connected": false }`  
+**And** `GET /api/music/status` returns `"spotify": { "connected": false }`  
 **And** any `playlist_pairs` that reference Spotify playlists are NOT automatically deleted (handled separately)  
 
 ---
@@ -93,12 +93,12 @@ The user connects their Spotify and YouTube Music accounts via OAuth2. Once conn
 
 | Method | Path | Description |
 |---|---|---|
-| GET | `/api/auth/spotify/connect` | Initiate Spotify OAuth (redirects to Spotify) |
-| GET | `/api/auth/spotify/callback` | Handle Spotify OAuth callback |
-| GET | `/api/auth/ytmusic/connect` | Initiate YT Music OAuth (redirects to Google) |
-| GET | `/api/auth/ytmusic/callback` | Handle YT Music OAuth callback |
-| DELETE | `/api/auth/{provider}` | Disconnect provider |
-| GET | `/api/auth/status` | Get connection status for all providers |
+| GET | `/api/music/spotify/connect` | Initiate Spotify OAuth (redirects to Spotify) |
+| GET | `/api/music/spotify/callback` | Handle Spotify OAuth callback |
+| GET | `/api/music/ytmusic/connect` | Initiate YT Music OAuth (redirects to Google) |
+| GET | `/api/music/ytmusic/callback` | Handle YT Music OAuth callback |
+| DELETE | `/api/music/{provider}` | Disconnect provider |
+| GET | `/api/music/status` | Get connection status for all providers |
 
 ---
 

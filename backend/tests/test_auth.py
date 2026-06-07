@@ -66,7 +66,7 @@ def make_token_row(session, provider: str) -> ProviderToken:
 # ── Tests ─────────────────────────────────────────────────────────────────────
 
 def test_status_both_disconnected(client):
-    resp = client.get("/api/auth/status")
+    resp = client.get("/api/music/status")
     assert resp.status_code == 200
     data = resp.json()
     assert data["spotify"]["connected"] is False
@@ -78,7 +78,7 @@ async def test_status_one_connected(client, db_session):
     make_token_row(db_session, "spotify")
     await db_session.commit()
 
-    resp = client.get("/api/auth/status")
+    resp = client.get("/api/music/status")
     assert resp.status_code == 200
     data = resp.json()
     assert data["spotify"]["connected"] is True
@@ -86,20 +86,20 @@ async def test_status_one_connected(client, db_session):
 
 
 def test_connect_spotify_redirects(client):
-    resp = client.get("/api/auth/spotify/connect", follow_redirects=False)
+    resp = client.get("/api/music/spotify/connect", follow_redirects=False)
     assert resp.status_code in (302, 307)
     assert "accounts.spotify.com" in resp.headers["location"]
     assert "oauth_state" in resp.cookies
 
 
 def test_connect_ytmusic_redirects(client):
-    resp = client.get("/api/auth/ytmusic/connect", follow_redirects=False)
+    resp = client.get("/api/music/ytmusic/connect", follow_redirects=False)
     assert resp.status_code in (302, 307)
     assert "accounts.google.com" in resp.headers["location"]
 
 
 def test_callback_state_mismatch_returns_400(client):
-    resp = client.get("/api/auth/spotify/callback?code=abc&state=wrong_state")
+    resp = client.get("/api/music/spotify/callback?code=abc&state=wrong_state")
     assert resp.status_code == 400
 
 
@@ -108,19 +108,19 @@ async def test_disconnect_provider(client, db_session):
     make_token_row(db_session, "spotify")
     await db_session.commit()
 
-    resp = client.delete("/api/auth/spotify")
+    resp = client.delete("/api/music/spotify")
     assert resp.status_code == 204
 
-    status = client.get("/api/auth/status").json()
+    status = client.get("/api/music/status").json()
     assert status["spotify"]["connected"] is False
 
 
 @pytest.mark.asyncio
 async def test_disconnect_not_connected_returns_404(client, db_session):
-    resp = client.delete("/api/auth/ytmusic")
+    resp = client.delete("/api/music/ytmusic")
     assert resp.status_code == 404
 
 
 def test_disconnect_unknown_provider_returns_404(client):
-    resp = client.delete("/api/auth/apple")
+    resp = client.delete("/api/music/apple")
     assert resp.status_code == 404

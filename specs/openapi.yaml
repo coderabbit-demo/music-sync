@@ -20,7 +20,7 @@ paths:
 
   # ─── Auth ────────────────────────────────────────────────────────────────────
 
-  /auth/status:
+  /music/status:
     get:
       tags: [auth]
       summary: Get connection status for all providers
@@ -33,7 +33,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/AuthStatus"
 
-  /auth/spotify/connect:
+  /music/spotify/connect:
     get:
       tags: [auth]
       summary: Initiate Spotify OAuth2 flow
@@ -47,7 +47,7 @@ paths:
               schema:
                 type: string
 
-  /auth/spotify/callback:
+  /music/spotify/callback:
     get:
       tags: [auth]
       summary: Handle Spotify OAuth2 callback
@@ -77,7 +77,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Error"
 
-  /auth/ytmusic/connect:
+  /music/ytmusic/connect:
     get:
       tags: [auth]
       summary: Initiate YouTube Music OAuth2 flow
@@ -86,7 +86,7 @@ paths:
         "302":
           description: Redirect to Google OAuth authorization URL
 
-  /auth/ytmusic/callback:
+  /music/ytmusic/callback:
     get:
       tags: [auth]
       summary: Handle YouTube Music OAuth2 callback
@@ -108,7 +108,7 @@ paths:
         "400":
           $ref: "#/components/responses/BadRequest"
 
-  /auth/{provider}:
+  /music/{provider}:
     delete:
       tags: [auth]
       summary: Disconnect a provider

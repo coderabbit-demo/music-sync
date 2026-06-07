@@ -31,7 +31,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(auth_router, prefix="/api/music", tags=["auth"])
 app.include_router(playlists_router, prefix="/api/playlists", tags=["playlists"])
 app.include_router(sync_router, prefix="/api/sync", tags=["sync"])
 
