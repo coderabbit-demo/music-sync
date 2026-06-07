@@ -70,7 +70,6 @@ async def _do_run_sync(job_id: int) -> None:
             yt_row.token_expiry = ytmusic_svc.token_response_to_expiry(token_resp)
 
         sp = spotify_svc.build_client(fresh_sp)
-        yt = ytmusic_svc.build_client(yt_access, yt_refresh, yt_row.token_expiry)
 
         # Mark job as running
         job.status = "running"
@@ -78,8 +77,8 @@ async def _do_run_sync(job_id: int) -> None:
         await db.commit()
 
         try:
-            # Run sync engine (synchronous — spotipy/ytmusicapi are not async)
-            sync_result = run_sync(pair, sp, yt)
+            # Run sync engine (synchronous — spotipy and httpx sync client)
+            sync_result = run_sync(pair, sp, yt_access)
 
             # Persist track results
             for tr in sync_result.tracks:

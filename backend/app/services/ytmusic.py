@@ -1,11 +1,14 @@
-import json
+"""YouTube Music service using the official YouTube Data API v3.
+
+All playlist operations go to https://www.googleapis.com/youtube/v3/
+with the stored OAuth Bearer token.  No ytmusicapi / InnerTube calls.
+"""
+
 import logging
-import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
-import ytmusicapi
 
 from app.core.config import settings
 
@@ -14,7 +17,10 @@ logger = logging.getLogger(__name__)
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 YTMUSIC_SCOPE = "https://www.googleapis.com/auth/youtube"
+YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
 
+
+# ── Auth ──────────────────────────────────────────────────────────────────────
 
 def get_auth_url(state: str) -> str:
     params = {
@@ -62,125 +68,172 @@ async def refresh_access_token(refresh_token: str) -> dict:
         return resp.json()
 
 
-def build_client(access_token: str, refresh_token: str, token_expiry: datetime) -> ytmusicapi.YTMusic:
-    """Build an authenticated YTMusic client from stored token fields.
-
-    Uses OAUTH_CUSTOM_FULL mode: passes the Bearer token directly as a header so
-    ytmusicapi skips its internal RefreshingToken/OAuthCredentials machinery. Token
-    refresh is handled by the get_ytmusic_client dependency instead.
-    """
-    auth_headers = {
-        "authorization": f"Bearer {access_token}",
-        "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:88.0) Gecko/20100101 Firefox/88.0",
-        "accept": "*/*",
-        "accept-encoding": "gzip, deflate",
-        "content-type": "application/json",
-        "origin": "https://music.youtube.com",
-        "X-Goog-Request-Time": str(int(time.time())),
-    }
-    yt = ytmusicapi.YTMusic(auth=json.dumps(auth_headers))
-
-    def _log_yt_error(response, *args, **kwargs):
-        if response.status_code >= 400:
-            logger.error(
-                "YTMusic API error %d for %s: %s",
-                response.status_code,
-                response.url,
-                response.text[:2000],
-            )
-
-    yt._session.hooks["response"].append(_log_yt_error)
-    return yt
-
-
 def token_response_to_expiry(token_response: dict) -> datetime:
     """Convert Google token response to an aware UTC datetime."""
     expires_in = token_response.get("expires_in", 3600)
     return datetime.now(tz=timezone.utc) + timedelta(seconds=expires_in)
 
 
+# ── Internal HTTP helpers ─────────────────────────────────────────────────────
+
+def _headers(access_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {access_token}"}
+
+
+def _yt_get(access_token: str, endpoint: str, **params: object) -> dict:
+    with httpx.Client() as client:
+        resp = client.get(
+            f"{YOUTUBE_API_BASE}/{endpoint}",
+            headers=_headers(access_token),
+            params={k: v for k, v in params.items() if v is not None},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _yt_post(access_token: str, endpoint: str, body: dict, **params: object) -> dict:
+    with httpx.Client() as client:
+        resp = client.post(
+            f"{YOUTUBE_API_BASE}/{endpoint}",
+            headers=_headers(access_token),
+            params={k: v for k, v in params.items() if v is not None},
+            json=body,
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+
+def _fetch_all_pages(access_token: str, endpoint: str, **params: object) -> tuple[list, int]:
+    """Fetch every page of a list endpoint. Returns (items, totalResults)."""
+    all_items: list = []
+    total = 0
+    page_token: str | None = None
+    while True:
+        p = dict(params)
+        if page_token:
+            p["pageToken"] = page_token
+        data = _yt_get(access_token, endpoint, **p)
+        total = data.get("pageInfo", {}).get("totalResults", total)
+        all_items.extend(data.get("items", []))
+        page_token = data.get("nextPageToken")
+        if not page_token:
+            break
+    return all_items, total
+
+
+def _parse_playlist_item(item: dict) -> dict | None:
+    snippet = item.get("snippet", {})
+    video_id = (
+        snippet.get("resourceId", {}).get("videoId")
+        or item.get("contentDetails", {}).get("videoId")
+    )
+    if not video_id:
+        return None
+    # videoOwnerChannelTitle is the video uploader (usually the artist on official channels)
+    channel = snippet.get("videoOwnerChannelTitle") or snippet.get("channelTitle") or ""
+    return {
+        "id": video_id,
+        "name": snippet.get("title", ""),
+        "artists": [channel] if channel else [],
+        "album": None,
+        "duration_ms": None,
+        "isrc": None,
+    }
+
+
 # ── Playlist operations ───────────────────────────────────────────────────────
 
-def list_playlists(yt: ytmusicapi.YTMusic, limit: int = 50, offset: int = 0) -> dict:
-    # ytmusicapi returns all playlists at once; we paginate in Python
-    all_playlists = yt.get_library_playlists(limit=9999)
+def list_playlists(access_token: str, limit: int = 50, offset: int = 0) -> dict:
+    all_playlists, total = _fetch_all_pages(
+        access_token, "playlists",
+        part="snippet,contentDetails",
+        mine="true",
+        maxResults=50,
+    )
     page = all_playlists[offset : offset + limit]
     items = []
     for p in page:
-        thumbnails = p.get("thumbnails") or []
+        snippet = p.get("snippet", {})
+        thumbnails = snippet.get("thumbnails", {})
+        thumb_url = None
+        for size in ("maxres", "high", "medium", "default"):
+            if size in thumbnails:
+                thumb_url = thumbnails[size]["url"]
+                break
         items.append({
-            "id": p.get("playlistId", ""),
-            "name": p.get("title", ""),
-            "description": p.get("description") or None,
-            "track_count": p.get("count") or 0,
-            "thumbnail_url": thumbnails[-1]["url"] if thumbnails else None,
+            "id": p["id"],
+            "name": snippet.get("title", ""),
+            "description": snippet.get("description") or None,
+            "track_count": p.get("contentDetails", {}).get("itemCount", 0),
+            "thumbnail_url": thumb_url,
             "owner": None,
         })
-    return {"items": items, "total": len(all_playlists), "limit": limit, "offset": offset}
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-def get_playlist_tracks(yt: ytmusicapi.YTMusic, playlist_id: str, limit: int = 100, offset: int = 0) -> dict:
-    result = yt.get_playlist(playlist_id, limit=None)
-    all_tracks = result.get("tracks", [])
-    page = all_tracks[offset : offset + limit]
-    items = []
-    for track in page:
-        if not track.get("videoId"):
-            continue
-        artists_raw = track.get("artists") or []
-        album_raw = track.get("album") or {}
-        duration_s = track.get("duration_seconds")
-        items.append({
-            "id": track["videoId"],
-            "name": track.get("title", ""),
-            "artists": [a["name"] for a in artists_raw if a.get("name")],
-            "album": album_raw.get("name"),
-            "duration_ms": duration_s * 1000 if duration_s else None,
-            "isrc": None,
-        })
-    return {"items": items, "total": len(all_tracks), "limit": limit, "offset": offset}
+def get_playlist_tracks(access_token: str, playlist_id: str, limit: int = 100, offset: int = 0) -> dict:
+    all_items, total = _fetch_all_pages(
+        access_token, "playlistItems",
+        part="snippet,contentDetails",
+        playlistId=playlist_id,
+        maxResults=50,
+    )
+    page = all_items[offset : offset + limit]
+    items = [t for item in page if (t := _parse_playlist_item(item))]
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
 
 
-def get_all_playlist_tracks(yt: ytmusicapi.YTMusic, playlist_id: str) -> list[dict]:
-    """Fetch all tracks in a playlist."""
-    result = yt.get_playlist(playlist_id, limit=None)
-    items = []
-    for track in result.get("tracks", []):
-        if not track.get("videoId"):
-            continue
-        artists_raw = track.get("artists") or []
-        album_raw = track.get("album") or {}
-        duration_s = track.get("duration_seconds")
-        items.append({
-            "id": track["videoId"],
-            "name": track.get("title", ""),
-            "artists": [a["name"] for a in artists_raw if a.get("name")],
-            "album": album_raw.get("name"),
-            "duration_ms": duration_s * 1000 if duration_s else None,
-            "isrc": None,
-        })
-    return items
+def get_all_playlist_tracks(access_token: str, playlist_id: str) -> list[dict]:
+    """Fetch every track in a playlist."""
+    all_items, _ = _fetch_all_pages(
+        access_token, "playlistItems",
+        part="snippet,contentDetails",
+        playlistId=playlist_id,
+        maxResults=50,
+    )
+    return [t for item in all_items if (t := _parse_playlist_item(item))]
 
 
-def add_tracks(yt: ytmusicapi.YTMusic, playlist_id: str, video_ids: list[str]) -> None:
-    """Add tracks to a YT Music playlist, batching at 50 per call."""
-    for i in range(0, len(video_ids), 50):
-        yt.add_playlist_items(playlist_id, video_ids[i : i + 50])
+def add_tracks(access_token: str, playlist_id: str, video_ids: list[str]) -> None:
+    """Add video IDs to a YouTube playlist (one insert per video)."""
+    for video_id in video_ids:
+        _yt_post(
+            access_token,
+            "playlistItems",
+            body={
+                "snippet": {
+                    "playlistId": playlist_id,
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id},
+                }
+            },
+            part="snippet",
+        )
 
 
-def search_tracks(yt: ytmusicapi.YTMusic, query: str, limit: int = 5) -> list[dict]:
-    results = yt.search(query, filter="songs", limit=limit)
+def search_tracks(access_token: str, query: str, limit: int = 5) -> list[dict]:
+    """Search YouTube for videos matching query. Returns list of track dicts."""
+    data = _yt_get(
+        access_token,
+        "search",
+        part="snippet",
+        q=query,
+        type="video",
+        maxResults=limit,
+    )
     tracks = []
-    for r in results:
-        artists_raw = r.get("artists") or []
+    for item in data.get("items", []):
+        video_id = item.get("id", {}).get("videoId", "")
+        snippet = item.get("snippet", {})
+        channel = snippet.get("channelTitle", "")
         tracks.append({
-            "id": r.get("videoId", ""),
-            "name": r.get("title", ""),
-            "artists": [a["name"] for a in artists_raw if a.get("name")],
+            "id": video_id,
+            "name": snippet.get("title", ""),
+            "artists": [channel] if channel else [],
         })
     return tracks
 
 
-def get_playlist_name(yt: ytmusicapi.YTMusic, playlist_id: str) -> str:
-    result = yt.get_playlist(playlist_id, limit=0)
-    return result.get("title", "")
+def get_playlist_name(access_token: str, playlist_id: str) -> str:
+    data = _yt_get(access_token, "playlists", part="snippet", id=playlist_id)
+    items = data.get("items", [])
+    return items[0].get("snippet", {}).get("title", "") if items else ""
