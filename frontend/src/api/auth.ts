@@ -19,7 +19,7 @@ export const authApi = {
   },
 
   connectYTMusic: () => {
-    window.location.href = "/api/music/ytmusic/connect";
+    window.location.href = "http://127.0.0.1:8000/api/music/ytmusic/connect";
   },
 
   disconnect: (provider: "spotify" | "ytmusic"): Promise<void> =>
