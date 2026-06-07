@@ -4,11 +4,15 @@ All playlist operations go to https://www.googleapis.com/youtube/v3/
 with the stored OAuth Bearer token.  No ytmusicapi / InnerTube calls.
 """
 
+import hashlib
+import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlencode
 
 import httpx
+import redis as redis_lib
 
 from app.core.config import settings
 
@@ -18,6 +22,30 @@ GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 YTMUSIC_SCOPE = "https://www.googleapis.com/auth/youtube"
 YOUTUBE_API_BASE = "https://www.googleapis.com/youtube/v3"
+
+# ── Redis search cache ────────────────────────────────────────────────────────
+
+_redis: redis_lib.Redis | None = None  # type: ignore[type-arg]
+
+
+def _get_redis() -> redis_lib.Redis | None:  # type: ignore[type-arg]
+    """Return a lazily-initialised Redis client, or None if unavailable."""
+    global _redis
+    if _redis is not None:
+        return _redis
+    try:
+        client = redis_lib.Redis.from_url(settings.redis_url, decode_responses=True)
+        client.ping()
+        _redis = client
+        return _redis
+    except Exception:
+        logger.warning("Redis unavailable — YouTube search cache disabled")
+        return None
+
+
+def _search_cache_key(query: str) -> str:
+    digest = hashlib.sha256(query.strip().lower().encode()).hexdigest()
+    return f"yt:search:{digest}"
 
 
 # ── Auth ──────────────────────────────────────────────────────────────────────
@@ -81,14 +109,35 @@ def _headers(access_token: str) -> dict[str, str]:
 
 
 def _yt_get(access_token: str, endpoint: str, **params: object) -> dict:
-    with httpx.Client() as client:
-        resp = client.get(
-            f"{YOUTUBE_API_BASE}/{endpoint}",
-            headers=_headers(access_token),
-            params={k: v for k, v in params.items() if v is not None},
-        )
-        resp.raise_for_status()
-        return resp.json()
+    """GET a YouTube Data API v3 endpoint.
+
+    Retries up to settings.yt_search_max_retries times on 429 responses using
+    exponential backoff (2 s, 4 s, 8 s …).  All other HTTP errors raise
+    immediately.
+    """
+    last_exc: httpx.HTTPStatusError | None = None
+    for attempt in range(settings.yt_search_max_retries + 1):
+        try:
+            with httpx.Client() as client:
+                resp = client.get(
+                    f"{YOUTUBE_API_BASE}/{endpoint}",
+                    headers=_headers(access_token),
+                    params={k: v for k, v in params.items() if v is not None},
+                )
+                resp.raise_for_status()
+                return resp.json()
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 429:
+                raise
+            last_exc = exc
+            if attempt < settings.yt_search_max_retries:
+                wait = 2 ** (attempt + 1)   # 2, 4, 8 seconds
+                logger.warning(
+                    "YouTube API 429 on %s (attempt %d/%d) — retrying in %ds",
+                    endpoint, attempt + 1, settings.yt_search_max_retries, wait,
+                )
+                time.sleep(wait)
+    raise last_exc  # type: ignore[misc]
 
 
 def _yt_post(access_token: str, endpoint: str, body: dict, **params: object) -> dict:
@@ -211,7 +260,27 @@ def add_tracks(access_token: str, playlist_id: str, video_ids: list[str]) -> Non
 
 
 def search_tracks(access_token: str, query: str, limit: int = 5) -> list[dict]:
-    """Search YouTube for videos matching query. Returns list of track dicts."""
+    """Search YouTube for videos matching query. Returns list of track dicts.
+
+    Results are cached in Redis (TTL: settings.yt_search_cache_ttl, default 7 days)
+    to avoid burning quota units on repeated syncs of the same playlist.
+    A throttle delay is applied before each live API call to prevent burst 429s.
+    """
+    cache_key = _search_cache_key(query)
+    rc = _get_redis()
+
+    if rc is not None:
+        try:
+            cached = rc.get(cache_key)
+            if cached is not None:
+                logger.debug("yt:search cache hit — %s", query)
+                return json.loads(cached)
+        except Exception:
+            logger.warning("Redis read error for %s — falling through to API", cache_key)
+
+    # Throttle only fires for live API calls (cache hits skip straight to return above)
+    time.sleep(settings.yt_search_throttle_delay)
+
     data = _yt_get(
         access_token,
         "search",
@@ -230,6 +299,14 @@ def search_tracks(access_token: str, query: str, limit: int = 5) -> list[dict]:
             "name": snippet.get("title", ""),
             "artists": [channel] if channel else [],
         })
+
+    if rc is not None:
+        try:
+            rc.setex(cache_key, settings.yt_search_cache_ttl, json.dumps(tracks))
+            logger.debug("yt:search cached — %s (TTL=%ds)", query, settings.yt_search_cache_ttl)
+        except Exception:
+            logger.warning("Redis write error for %s", cache_key)
+
     return tracks
 
 

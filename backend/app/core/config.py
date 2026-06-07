@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     # Sync
     track_match_threshold: int = 85  # rapidfuzz WRatio minimum (0–100)
 
+    # YouTube Data API v3 quota protection
+    yt_search_cache_ttl: int = 604800       # seconds — 7 days
+    yt_search_throttle_delay: float = 0.15  # seconds between live search calls
+    yt_search_max_retries: int = 3          # 429 retry attempts
+
     # Frontend URL — used for post-OAuth redirects
     frontend_url: str = "http://localhost"
 
