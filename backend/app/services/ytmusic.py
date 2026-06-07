@@ -75,7 +75,6 @@ def build_client(access_token: str, refresh_token: str, token_expiry: datetime) 
         "accept": "*/*",
         "accept-encoding": "gzip, deflate",
         "content-type": "application/json",
-        "content-encoding": "gzip",
         "origin": "https://music.youtube.com",
         "X-Goog-Request-Time": str(int(time.time())),
     }
